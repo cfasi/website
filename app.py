@@ -109,6 +109,18 @@ HANDBOOK_BY_RULE = {
         "as scheduled, on time and prepared to start work at the beginning of their shifts and at the end of meal "
         "periods. Late arrival, early departure or other absences from scheduled hours are disruptive and should be avoided."
     ),
+    "Calling out on a Saturday (no coverage)": (
+        "If you will be absent from or tardy for work for any reason, you must call your supervisor as soon as possible, "
+        "but at least two hours before the beginning of your scheduled shift, and advise of the reason for your absence "
+        "or tardiness and when you expect to return to work. Obviously, if you know of a required absence from work in advance, "
+        "you must inform your supervisor as far in advance as possible, so that Chick-fil-A at Staten Island Mall can adjust "
+        "the work schedule accordingly. In certain instances, subject to applicable law, if an absence is to exceed one day, "
+        "you may be required to provide your supervisor with an update at the beginning of each day of the absence, until a "
+        "return to work date has been established.\n\n"
+        "Chick-fil-A at Staten Island Mall reserves the right to discipline employees for unexcused absences (including late arrivals "
+        "or early departures), up to and including termination of employment, in accordance with the Progressive Discipline Policy."
+    ),
+    
     "Late by 6 or more minutes": (
         "Employees are expected to be punctual and regular in attendance. Employees are expected to report to work "
         "as scheduled, on time and prepared to start work at the beginning of their shifts and at the end of meal "
