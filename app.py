@@ -429,7 +429,7 @@ def can_view_writeup_system() -> bool:
     return has_role("team_member")
 
 def can_use_writeup_manager_mode() -> bool:
-    return get_current_role() in ["supervisor", "director"]
+    return get_current_role() in ["shift_lead", "supervisor", "director"]
 
 def can_use_writeup_admin_mode() -> bool:
     return get_current_role() == "director"
