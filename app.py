@@ -1013,6 +1013,14 @@ def format_writeup_notes(
 
     return "\n".join(parts)
 
+@st.dialog("Write-Up Submitted")
+def show_writeup_success_dialog():
+    st.success("Thank you, write-up submitted.")
+
+    if st.button("OK", type="primary", use_container_width=True):
+        st.session_state["show_writeup_success_dialog"] = False
+        st.rerun()
+
 # -----------------------------
 # Slack helpers
 # -----------------------------
@@ -1567,15 +1575,16 @@ def render_links_section(category: str):
 
         allowed_roles = get_allowed_view_roles_for_poster(category)
 
-        with st.form(f"submit_link_form_{category}"):
-            system_name = st.text_input("System Name")
-            external_url = st.text_input("External Link")
-            description = st.text_area("Description")
+        with st.form(f"submit_link_form_{category}", clear_on_submit=True):
+            system_name = st.text_input("System Name", key=f"link_system_name_{category}")
+            external_url = st.text_input("External Link", key=f"link_external_url_{category}")
+            description = st.text_area("Description", key=f"link_description_{category}")
 
             min_view_role = st.selectbox(
                 "Who should be able to view this link?",
                 allowed_roles,
-                format_func=lambda x: f"{ROLE_LABELS[x]} and above"
+                format_func=lambda x: f"{ROLE_LABELS[x]} and above",
+                key=f"link_min_view_role_{category}"
             )
 
             submit_link = st.form_submit_button("Submit Link", use_container_width=True)
@@ -1595,7 +1604,17 @@ def render_links_section(category: str):
                 )
 
                 if success:
-                    st.success("Link posted successfully." if can_submit_direct else "Suggestion submitted for approval.")
+                    st.session_state[f"link_system_name_{category}"] = ""
+                    st.session_state[f"link_external_url_{category}"] = ""
+                    st.session_state[f"link_description_{category}"] = ""
+                    if allowed_roles:
+                        st.session_state[f"link_min_view_role_{category}"] = allowed_roles[0]
+
+                    st.success(
+                        "Link posted successfully."
+                        if can_submit_direct
+                        else "Suggestion submitted for approval."
+                    )
                     st.rerun()
                 else:
                     st.error("Unable to submit link.")
@@ -1972,8 +1991,24 @@ def employee_mode():
 
         labels = [m["full_name"] for m in filtered]
         name_to_id = {m["full_name"]: m["id"] for m in filtered}
-        chosen_name = st.selectbox("Select a team member", labels)
-        member_id = name_to_id[chosen_name]
+
+        # Add placeholder
+        labels_with_placeholder = ["-- Select a Team Member --"] + labels
+
+        chosen_name = st.selectbox(
+            "Select a team member",
+            labels_with_placeholder,
+            index=0
+        )
+
+        # Only assign member_id if real selection is made
+        if chosen_name != "-- Select a Team Member --":
+            member_id = name_to_id[chosen_name]
+        else:
+            member_id = None
+            st.warning("Please select a team member before continuing.")
+            st.stop()
+
     else:
         standing_choice = st.selectbox("Standing (based on selected quarter points)", STANDING_ORDER)
 
@@ -2057,13 +2092,32 @@ def employee_mode():
 def manager_mode():
     st.header("Manager Mode (Add Write-Ups)")
 
+    # Reset the team-member dropdown after a successful submission.
+    # This runs before the selectbox is created.
+    if st.session_state.pop("reset_writeup_member_selection", False):
+        st.session_state.pop("writeup_member_select", None)
+        st.session_state.pop("writeup_member_search", None)
+
+    # Display the confirmation popup after the write-up has saved.
+    if st.session_state.get("show_writeup_success_dialog", False):
+        show_writeup_success_dialog()
+
     if not can_use_writeup_manager_mode():
         st.error("You do not have access to Manager Mode.")
         return
 
     st.subheader("Find Team Member")
-    member_search = st.text_input("Search team member (active only)", value="")
-    members = fetch_team_members(member_search, include_inactive=False)
+
+    member_search = st.text_input(
+        "Search team member (active only)",
+        value="",
+        key="writeup_member_search"
+    )
+
+    members = fetch_team_members(
+        member_search,
+        include_inactive=False
+    )
 
     if not members:
         st.info("No active team members match that search.")
@@ -2072,10 +2126,25 @@ def manager_mode():
     member_labels = [m["full_name"] for m in members]
     member_map = {m["full_name"]: m["id"] for m in members}
 
-    member_name = st.selectbox("Select team member", member_labels)
+    member_labels_with_placeholder = [
+        "-- Select Team Member --"
+    ] + member_labels
+
+    member_name = st.selectbox(
+        "Select team member",
+        member_labels_with_placeholder,
+        index=0,
+        key="writeup_member_select"
+    )
+
+    if member_name == "-- Select Team Member --":
+        st.info("Select a team member to continue.")
+        st.stop()
+
     member_id = member_map[member_name]
 
     categories = fetch_categories(include_inactive=False)
+
     if not categories:
         st.error("No active categories found.")
         return
@@ -2086,22 +2155,34 @@ def manager_mode():
     st.markdown("---")
     st.subheader("Create Write-Up")
 
-    chosen_cat_name = st.selectbox("Category", cat_names)
+    chosen_cat_name = st.selectbox(
+        "Category",
+        cat_names
+    )
+
     chosen_cat = cat_map[chosen_cat_name]
     category_id = chosen_cat["id"]
 
     custom_reason = ""
-    points_val_default = 0
     prev_quarter_label = ""
     new_quarter_label = ""
     quarter_points_after_save = 0
 
     if chosen_cat_name == "Documented Conversation":
-        st.info("This is a documented conversation. No points will be assigned.")
-        custom_reason = st.text_input("Conversation Topic / Reason")
+        st.info(
+            "This is a documented conversation. "
+            "No points will be assigned."
+        )
+
+        custom_reason = st.text_input(
+            "Conversation Topic / Reason"
+        )
+
         auto_points = 0
+
     else:
         rules = fetch_rules_for_category(category_id)
+
         if not rules:
             st.warning("No rules found for this category.")
             return
@@ -2109,65 +2190,148 @@ def manager_mode():
         rule_labels = [r["rule_name"] for r in rules]
         rule_map = {r["rule_name"]: r for r in rules}
 
-        chosen_rule_name = st.selectbox("Reason / Rule", rule_labels)
+        chosen_rule_name = st.selectbox(
+            "Reason / Rule",
+            rule_labels
+        )
 
         hb_text = HANDBOOK_BY_RULE.get(chosen_rule_name)
+
         if hb_text:
             st.markdown("#### Employee Handbook Code")
             st.info(hb_text)
 
         chosen_rule = rule_map[chosen_rule_name]
-        auto_points = int(chosen_rule.get("base_points") or 0)
+        auto_points = int(
+            chosen_rule.get("base_points") or 0
+        )
 
         if chosen_rule.get("is_incremental"):
-            minutes_late = st.number_input("Minutes late", min_value=0, max_value=600, value=0, step=1)
-            auto_points = calc_late_points(int(minutes_late))
+            minutes_late = st.number_input(
+                "Minutes late",
+                min_value=0,
+                max_value=600,
+                value=0,
+                step=1
+            )
+
+            auto_points = calc_late_points(
+                int(minutes_late)
+            )
 
             if minutes_late < 6:
                 st.info("Under 6 minutes late → 0 points")
             else:
                 extra = (minutes_late - 5) // 10
-                st.info(f"Points = 1 + {extra} additional blocks = {auto_points}")
 
-    with st.form("add_writeup_form", clear_on_submit=True):
-        incident_dt = st.date_input("Incident Date", value=date.today())
+                st.info(
+                    f"Points = 1 + {extra} additional "
+                    f"blocks = {auto_points}"
+                )
 
-        manager_notes = st.text_area("Manager Notes")
-        secondary_lead_witness = st.text_input("Secondary Lead Witnessing Write-Up")
-        corrective_actions = st.text_area("Corrective Actions")
-        team_member_comments = st.text_area("Team Member's Comments")
+    with st.form(
+        "add_writeup_form",
+        clear_on_submit=True
+    ):
+        incident_dt = st.date_input(
+            "Incident Date",
+            value=date.today(),
+            key="wu_incident_dt"
+        )
+
+        manager_notes = st.text_area(
+            "Manager Notes",
+            key="wu_manager_notes"
+        )
+
+        secondary_lead_witness = st.text_input(
+            "Secondary Lead Witnessing Write-Up",
+            key="wu_secondary_lead"
+        )
+
+        corrective_actions = st.text_area(
+            "Corrective Actions",
+            key="wu_corrective_actions"
+        )
+
+        team_member_comments = st.text_area(
+            "Team Member's Comments",
+            key="wu_team_comments"
+        )
 
         st.markdown("#### Signatures")
-        team_member_signature = st.text_input("Team Member Signature")
-        leader_signature = st.text_input("Leader Signature")
-        secondary_leader_signature = st.text_input("Secondary Leader Signature")
-        signed_dt = st.date_input("Date Signed", value=date.today())
+
+        team_member_signature = st.text_input(
+            "Team Member Signature",
+            key="wu_team_sig"
+        )
+
+        leader_signature = st.text_input(
+            "Leader Signature",
+            key="wu_leader_sig"
+        )
+
+        secondary_leader_signature = st.text_input(
+            "Secondary Leader Signature",
+            key="wu_secondary_leader_sig"
+        )
+
+        signed_dt = st.date_input(
+            "Date Signed",
+            value=date.today(),
+            key="wu_signed_dt"
+        )
 
         if chosen_cat_name == "Documented Conversation":
             points_val = 0
-            st.caption("Points: 0 (Documented Conversation)")
+            st.caption(
+                "Points: 0 (Documented Conversation)"
+            )
+
         else:
             colA, colB = st.columns([1, 1])
+
             with colA:
-                points_override = st.toggle("Override points manually?", value=False)
+                points_override = st.toggle(
+                    "Override points manually?",
+                    value=False,
+                    key="wu_points_override"
+                )
+
             with colB:
                 points_val = st.number_input(
                     "Points",
                     value=int(auto_points),
                     step=1,
-                    disabled=not points_override
+                    disabled=not points_override,
+                    key="wu_points_val"
                 )
 
-        submitted = st.form_submit_button("Save Write-Up")
+        submitted = st.form_submit_button(
+            "Save Write-Up",
+            type="primary",
+            use_container_width=True
+        )
 
     if submitted:
         try:
-            existing_writeups = fetch_writeups_for_member(member_id)
+            existing_writeups = fetch_writeups_for_member(
+                member_id
+            )
+
             prev_quarter_label = quarter_key(incident_dt)
-            prev_points = points_in_quarter(existing_writeups, prev_quarter_label)
+
+            prev_points = points_in_quarter(
+                existing_writeups,
+                prev_quarter_label
+            )
+
             prev_standing = standing_label(prev_points)
 
-            reason_value = custom_reason if chosen_cat_name == "Documented Conversation" else chosen_rule_name
+            if chosen_cat_name == "Documented Conversation":
+                reason_value = custom_reason
+            else:
+                reason_value = chosen_rule_name
 
             final_notes = format_writeup_notes(
                 reason=reason_value,
@@ -2197,10 +2361,20 @@ def manager_mode():
                 notes=final_notes,
             )
 
-            updated_writeups = fetch_writeups_for_member(member_id)
+            updated_writeups = fetch_writeups_for_member(
+                member_id
+            )
+
             new_quarter_label = quarter_key(incident_dt)
-            quarter_points_after_save = points_in_quarter(updated_writeups, new_quarter_label)
-            new_standing = standing_label(quarter_points_after_save)
+
+            quarter_points_after_save = points_in_quarter(
+                updated_writeups,
+                new_quarter_label
+            )
+
+            new_standing = standing_label(
+                quarter_points_after_save
+            )
 
             maybe_post_standing_alert(
                 member_name=member_name,
@@ -2210,7 +2384,18 @@ def manager_mode():
                 q_points=quarter_points_after_save
             )
 
-            st.success("Write-up saved.")
+            st.session_state["last_submit"] = datetime.now()
+
+            # Trigger the confirmation popup.
+            st.session_state[
+                "show_writeup_success_dialog"
+            ] = True
+
+            # Reset the employee search and selection.
+            st.session_state[
+                "reset_writeup_member_selection"
+            ] = True
+
             st.rerun()
 
         except Exception as e:
