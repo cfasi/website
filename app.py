@@ -754,6 +754,7 @@ def create_link_submission(
     category: str,
     system_name: str,
     external_url: str,
+    file_url: str,
     description: str,
     min_view_role: str
 ):
@@ -765,7 +766,6 @@ def create_link_submission(
         visible = False
         approved_by_username = None
 
-        # SOP resources are posted directly by all roles except Team Members.
         if is_sop_category(category) and can_edit_sop_resources():
             status = "approved"
             visible = True
@@ -791,7 +791,8 @@ def create_link_submission(
         insert_data = {
             "category": category,
             "system_name": system_name.strip(),
-            "external_url": external_url.strip(),
+            "external_url": external_url.strip() if external_url else None,
+            "file_url": file_url.strip() if file_url else None,
             "description": description.strip(),
             "submitted_by_username": username,
             "submitted_by_role": role,
@@ -884,9 +885,9 @@ def clean_storage_filename(filename: str) -> str:
     return filename
 
 
-def upload_sop_file(uploaded_file):
+def upload_resource_file(uploaded_file, category: str):
     """
-    Uploads a Streamlit UploadedFile to the public SOP Storage bucket
+    Uploads a resource file to Supabase Storage
     and returns its public URL.
     """
     if uploaded_file is None:
@@ -894,11 +895,12 @@ def upload_sop_file(uploaded_file):
 
     try:
         safe_filename = clean_storage_filename(uploaded_file.name)
-
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         username = clean_storage_filename(get_current_username())
+        safe_category = clean_storage_filename(category)
 
         storage_path = (
+            f"{safe_category}/"
             f"{username}/"
             f"{timestamp}_{safe_filename}"
         )
@@ -921,8 +923,6 @@ def upload_sop_file(uploaded_file):
             .get_public_url(storage_path)
         )
 
-        # Different supabase-py versions may return either a string
-        # or a small response object/dictionary.
         if isinstance(public_url_result, str):
             return public_url_result
 
@@ -1450,10 +1450,17 @@ def show_link_card(link, show_actions=False):
         unsafe_allow_html=True
     )
 
-    if is_sop_category(link.get("category", "")):
-        st.markdown(f"[Open Resource]({link['external_url']})")
-    else:
-        st.markdown(f"[Open Link]({link['external_url']})")
+    external_url = link.get("external_url")
+    file_url = link.get("file_url")
+
+    if external_url:
+        st.markdown(f"[Open External Link]({external_url})")
+
+    if file_url:
+        st.markdown(f"[Open Uploaded File]({file_url})")
+
+    if not external_url and not file_url:
+        st.caption("No link or uploaded file is attached.")
 
     if show_actions:
         col1, col2 = st.columns(2)
@@ -1564,7 +1571,17 @@ def render_pending_card(link, prefix: str):
         unsafe_allow_html=True
     )
 
-    st.markdown(f"[Open Suggested Link]({link['external_url']})")
+    external_url = link.get("external_url")
+    file_url = link.get("file_url")
+
+    if external_url:
+        st.markdown(f"[Open Suggested Link]({external_url})")
+
+    if file_url:
+        st.markdown(f"[Open Suggested File]({file_url})")
+
+    if not external_url and not file_url:
+        st.caption("No link or uploaded file is attached.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1774,14 +1791,10 @@ def render_links_section(category: str):
             unsafe_allow_html=True
         )
 
-        if is_sop_category(category):
-            st.markdown("### Add SOP Resource")
-            st.caption(
-                "Add a website link or upload a file. "
-                "You only need to provide one of the two."
-            )
-        else:
-            st.markdown("### Submit a Link")
+        st.markdown("### Add Resource")
+        st.caption(
+            "You may add an external link, upload a file, or provide both."
+        )
 
         allowed_roles = get_allowed_view_roles_for_poster(category)
 
@@ -1805,34 +1818,28 @@ def render_links_section(category: str):
                 key=f"link_external_url_{category}"
             )
 
-            uploaded_file = None
+            uploaded_file = st.file_uploader(
+                "Upload File",
+                type=[
+                    "pdf",
+                    "doc",
+                    "docx",
+                    "xls",
+                    "xlsx",
+                    "csv",
+                    "ppt",
+                    "pptx",
+                    "txt",
+                    "jpg",
+                    "jpeg",
+                    "png"
+                ],
+                key=f"resource_file_uploader_{category}"
+            )
 
-            if is_sop_category(category):
-                st.markdown("**Or upload a file:**")
-
-                uploaded_file = st.file_uploader(
-                    "Upload SOP File",
-                    type=[
-                        "pdf",
-                        "doc",
-                        "docx",
-                        "xls",
-                        "xlsx",
-                        "csv",
-                        "ppt",
-                        "pptx",
-                        "txt",
-                        "jpg",
-                        "jpeg",
-                        "png"
-                    ],
-                    key=f"sop_file_uploader_{category}"
-                )
-
-                st.caption(
-                    "Accepted files include PDF, Word, Excel, "
-                    "PowerPoint, text, CSV, JPG, and PNG."
-                )
+            st.caption(
+                "You can provide the link, the file, or both."
+            )
 
             min_view_role = st.selectbox(
                 "Who should be able to view this resource?",
@@ -1844,9 +1851,7 @@ def render_links_section(category: str):
             )
 
             submit_link = st.form_submit_button(
-                "Add Resource"
-                if is_sop_category(category)
-                else "Submit Link",
+                "Add Resource",
                 type="primary",
                 use_container_width=True
             )
@@ -1860,22 +1865,19 @@ def render_links_section(category: str):
 
             elif not entered_url and uploaded_file is None:
                 st.error(
-                    "Please provide an external link or upload a file."
-                )
-
-            elif entered_url and uploaded_file is not None:
-                st.error(
-                    "Please provide either an external link or a file, "
-                    "not both."
+                    "Please provide an external link, upload a file, or both."
                 )
 
             else:
-                final_url = entered_url
+                uploaded_file_url = None
 
                 if uploaded_file is not None:
-                    final_url = upload_sop_file(uploaded_file)
+                    uploaded_file_url = upload_resource_file(
+                        uploaded_file,
+                        category
+                    )
 
-                    if not final_url:
+                    if not uploaded_file_url:
                         st.error(
                             "The resource was not saved because "
                             "the file upload failed."
@@ -1885,7 +1887,8 @@ def render_links_section(category: str):
                 success = create_link_submission(
                     category=category,
                     system_name=resource_name,
-                    external_url=final_url,
+                    external_url=entered_url,
+                    file_url=uploaded_file_url,
                     description=description,
                     min_view_role=min_view_role
                 )
@@ -2581,13 +2584,25 @@ def manager_mode():
                 )
 
             with colB:
-                points_val = st.number_input(
-                    "Points",
-                    value=int(auto_points),
-                    step=1,
-                    disabled=not points_override,
-                    key="wu_points_val"
-                )
+                if points_override:
+                    points_val = st.number_input(
+                        "Points",
+                        min_value=0,
+                        value=int(auto_points),
+                        step=1,
+                        key=f"wu_points_val_{category_id}_{chosen_rule_name}"
+                    )
+                else:
+                    points_val = int(auto_points)
+
+                    st.number_input(
+                        "Points",
+                        min_value=0,
+                        value=int(auto_points),
+                        step=1,
+                        disabled=True,
+                        key=f"wu_auto_points_{category_id}_{chosen_rule_name}"
+                    )
 
         submitted = st.form_submit_button(
             "Save Write-Up",
