@@ -81,6 +81,7 @@ CATEGORIES = [
 
 SOP_CATEGORY = "Standard Operating Procedures"
 SOP_STORAGE_BUCKET = "sop-files"
+LEADERSHIP_PHOTO_BUCKET = "leadership-photos"
 
 GOOGLE_CALENDAR_EMBED_URL = (
     "https://calendar.google.com/calendar/embed?"
@@ -945,6 +946,192 @@ def upload_sop_file(uploaded_file):
         st.error(f"File upload failed: {e}")
         return None
 
+def upload_leadership_photo(uploaded_file, leader_name: str):
+    if uploaded_file is None:
+        return None, None
+
+    try:
+        safe_leader_name = re.sub(
+            r"[^a-zA-Z0-9_-]",
+            "_",
+            leader_name.strip().lower()
+        )
+
+        safe_filename = re.sub(
+            r"[^a-zA-Z0-9._-]",
+            "_",
+            uploaded_file.name
+        )
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+        storage_path = (
+            f"{safe_leader_name}/"
+            f"{timestamp}_{safe_filename}"
+        )
+
+        file_bytes = uploaded_file.getvalue()
+        content_type = uploaded_file.type or "image/jpeg"
+
+        supabase.storage.from_(
+            LEADERSHIP_PHOTO_BUCKET
+        ).upload(
+            path=storage_path,
+            file=file_bytes,
+            file_options={
+                "content-type": content_type,
+                "upsert": "false"
+            }
+        )
+
+        public_url_result = (
+            supabase.storage
+            .from_(LEADERSHIP_PHOTO_BUCKET)
+            .get_public_url(storage_path)
+        )
+
+        if isinstance(public_url_result, str):
+            public_url = public_url_result
+
+        elif isinstance(public_url_result, dict):
+            public_url = (
+                public_url_result.get("publicUrl")
+                or public_url_result.get("public_url")
+            )
+
+        else:
+            public_url = getattr(
+                public_url_result,
+                "public_url",
+                None
+            )
+
+        if not public_url:
+            raise RuntimeError(
+                "Photo uploaded, but its public URL could not be retrieved."
+            )
+
+        return public_url, storage_path
+
+    except Exception as e:
+        st.error(f"Leadership photo upload failed: {e}")
+        return None, None
+
+def get_leadership_team(include_inactive: bool = False):
+    try:
+        query = (
+            supabase.table("leadership_team")
+            .select("*")
+        )
+
+        if not include_inactive:
+            query = query.eq("active", True)
+
+        result = (
+            query
+            .order("display_order")
+            .order("full_name")
+            .execute()
+        )
+
+        return result.data or []
+
+    except Exception as e:
+        st.error(f"Error loading leadership team: {e}")
+        return []
+
+
+def create_leadership_profile(
+    full_name: str,
+    rank: str,
+    title: str,
+    description: str,
+    photo_url: str,
+    storage_path: str,
+    display_order: int
+):
+    try:
+        result = (
+            supabase.table("leadership_team")
+            .insert({
+                "full_name": full_name.strip(),
+                "rank": rank,
+                "title": title.strip(),
+                "description": description.strip(),
+                "photo_url": photo_url,
+                "storage_path": storage_path,
+                "display_order": int(display_order),
+                "active": True,
+                "created_by_username": get_current_username()
+            })
+            .execute()
+        )
+
+        return bool(result.data)
+
+    except Exception as e:
+        st.error(f"Error adding leader: {e}")
+        return False
+
+def create_leadership_profile(
+    full_name: str,
+    rank: str,
+    title: str,
+    description: str,
+    photo_url: str,
+    storage_path: str,
+    display_order: int
+):
+    try:
+        result = (
+            supabase.table("leadership_team")
+            .insert({
+                "full_name": full_name.strip(),
+                "rank": rank,
+                "title": title.strip(),
+                "description": description.strip(),
+                "photo_url": photo_url,
+                "storage_path": storage_path,
+                "display_order": int(display_order),
+                "active": True,
+                "created_by_username": get_current_username()
+            })
+            .execute()
+        )
+
+        return bool(result.data)
+
+    except Exception as e:
+        st.error(f"Error adding leader: {e}")
+        return False
+
+
+def delete_leadership_profile(leader_id, storage_path=None):
+    try:
+        if storage_path:
+            try:
+                (
+                    supabase.storage
+                    .from_(LEADERSHIP_PHOTO_BUCKET)
+                    .remove([storage_path])
+                )
+            except Exception:
+                # Still remove the database profile if photo deletion fails.
+                pass
+
+        (
+            supabase.table("leadership_team")
+            .delete()
+            .eq("id", leader_id)
+            .execute()
+        )
+
+        return True
+
+    except Exception as e:
+        st.error(f"Error deleting leader: {e}")
+        return False
+
 # -----------------------------
 # Goal helpers
 # -----------------------------
@@ -1371,6 +1558,30 @@ def render_home_edit_mode_toggle() -> bool:
             st.caption("Edit mode is on. Goal management tools are visible on this page.")
     return edit_mode
 
+def render_new_hire_edit_mode_toggle() -> bool:
+    """
+    Only directors can turn on editing for the New Hire page.
+    When editing is off, directors see the same page as Team Members.
+    """
+    if not has_role("director"):
+        return False
+
+    col1, col2 = st.columns([1.2, 4.8])
+
+    with col1:
+        edit_mode = st.toggle(
+            "Edit Mode",
+            key="edit_mode_new_hire"
+        )
+
+    with col2:
+        if edit_mode:
+            st.caption(
+                "Edit mode is on. New-hire management tools are visible."
+            )
+
+    return edit_mode
+
 def show_login():
     show_logo()
     section_header("Chick-fil-A Staten Island Mall Login")
@@ -1411,6 +1622,7 @@ def render_sidebar():
     pages = ["Home"]
 
     shared_pages = [
+        "New Hire Welcome",
         "Standard Operating Procedures",
         "Customer Experience",
         "Drive-Thru",
@@ -2847,6 +3059,827 @@ def admin_mode():
                 if st.button("Cancel", key="admin_cancel_delete_writeup"):
                     st.session_state.pending_delete_writeup_id = None
 
+
+
+# -----------------------------
+# New hire Page 
+# -----------------------------
+
+def render_new_hire_page():
+    show_logo()
+
+    section_header(
+        "Welcome to the Chick-fil-A Staten Island Mall Family!",
+        "We are excited to have you here."
+    )
+
+    new_hire_edit_mode = render_new_hire_edit_mode_toggle()
+
+    welcome_banner_html = (
+        '<div style="'
+        'background: linear-gradient(135deg, #fff3f5, #ffffff);'
+        'padding: 28px;'
+        'border-radius: 18px;'
+        'border: 1px solid #eeeeee;'
+        'text-align: center;'
+        'margin-bottom: 25px;'
+        'box-shadow: 0 4px 14px rgba(0,0,0,0.05);'
+        '">'
+        '<h2 style="'
+        'color: #c41230;'
+        'margin-top: 0;'
+        'margin-bottom: 10px;'
+        '">'
+        'Congratulations and Welcome! 🎉'
+        '</h2>'
+        '<p style="'
+        'font-size: 18px;'
+        'line-height: 1.6;'
+        'max-width: 800px;'
+        'margin: 0 auto;'
+        '">'
+        'Welcome to the Chick-fil-A Staten Island Mall team. '
+        'We believe every team member has the ability to dream, '
+        'achieve, and succeed. This page will help you prepare '
+        'for your first days and introduce you to our restaurant.'
+        '</p>'
+        '</div>'
+    )
+
+    st.markdown(
+        welcome_banner_html,
+        unsafe_allow_html=True
+    )
+
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🏠 Welcome",
+        "📅 Your First Week",
+        "📈 Training Journey",
+        "👥 Meet Leadership",
+        "❓ FAQs"
+    ])
+
+    # ===================================================
+    # TAB 1: WELCOME
+    # ===================================================
+    with tab1:
+        st.header("Welcome to Our Team")
+
+        st.write(
+            """
+            We are thrilled that you chose to join us.
+
+            At Chick-fil-A Staten Island Mall, we strive to create an
+            environment where every team member feels valued, challenged,
+            supported, and encouraged to grow.
+            """
+        )
+
+        st.markdown("### Our Mission")
+
+        st.success(
+            "To develop a team of people who dream, achieve, and succeed; "
+            "while being a pillar of support for a community who relies upon "
+            "our existence as much as we rely upon them."
+        )
+
+        st.markdown("---")
+        st.markdown("### What We Value")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.markdown(
+                """
+                <div style="
+                    border: 1px solid #eeeeee;
+                    border-radius: 15px;
+                    padding: 20px;
+                    text-align: center;
+                    min-height: 190px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 40px;">✨</div>
+                    <h3>Success</h3>
+                    <p>
+                        We measure success not alone by the dollar amount, but by the impact we have on the lives we touch each day. 
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        with col2:
+            st.markdown(
+                """
+                <div style="
+                    border: 1px solid #eeeeee;
+                    border-radius: 15px;
+                    padding: 20px;
+                    text-align: center;
+                    min-height: 190px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 40px;"> ☯️ </div>
+                    <h3>Humility</h3>
+                    <p>
+                        To always remain “hungry” and humble no matter where our success and failures take us 
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        with col3:
+            st.markdown(
+                """
+                <div style="
+                    border: 1px solid #eeeeee;
+                    border-radius: 15px;
+                    padding: 20px;
+                    text-align: center;
+                    min-height: 190px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 40px;">💡</div>
+                    <h3>Excellence</h3>
+                    <p>
+                        Everyone delivers excellence in pursuit of running a first-class Chick-fil-A restaurant
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        # Row 2 (centered)
+        spacer1, col4, col5, spacer2 = st.columns([1, 2, 2, 1])
+
+        with col4:
+            st.markdown(
+                """
+                <div style="
+                    border: 1px solid #eeeeee;
+                    border-radius: 15px;
+                    padding: 20px;
+                    text-align: center;
+                    min-height: 190px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 40px;">♥️</div>
+                    <h3>Love</h3>
+                    <p>
+                        The love we share amongst our team will spill over onto our guests and our community 
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        with col5:
+            st.markdown(
+                """
+                <div style="
+                    border: 1px solid #eeeeee;
+                    border-radius: 15px;
+                    padding: 20px;
+                    text-align: center;
+                    min-height: 190px;
+                    background: #ffffff;
+                ">
+                    <div style="font-size: 40px;">🌱</div>
+                    <h3>Faith</h3>
+                    <p>
+                        Believe that we will get through any type of adversity we face within and outside of the restaurant 
+                    </p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        st.markdown("---")
+
+        st.markdown("### What Makes Chick-fil-A Different")
+
+        st.write(
+            """
+            Our goal is not only to serve great food. We also want to provide
+            remarkable hospitality, create meaningful experiences, support
+            our community, and help our team members develop skills that will
+            benefit them throughout their lives.
+            """
+        )
+
+    # ===================================================
+    # TAB 2: FIRST WEEK
+    # ===================================================
+    with tab2:
+        st.header("Your First Week")
+
+        st.write(
+            """
+            Your first week is about getting comfortable, meeting the team,
+            learning our expectations, and beginning your training journey.
+            """
+        )
+
+        st.markdown("### First-Day Checklist")
+
+        st.checkbox(
+            "Meet your trainer",
+            key="new_hire_check_meet_trainer"
+        )
+
+        st.checkbox(
+            "Meet the leadership team",
+            key="new_hire_check_meet_leadership"
+        )
+
+        st.checkbox(
+            "Receive your uniform",
+            key="new_hire_check_uniform"
+        )
+
+        st.checkbox(
+            "Tour the restaurant",
+            key="new_hire_check_tour"
+        )
+
+        st.checkbox(
+            "Learn how to clock in and out",
+            key="new_hire_check_clock"
+        )
+
+        st.checkbox(
+            "Review basic food-safety expectations",
+            key="new_hire_check_food_safety"
+        )
+
+        st.checkbox(
+            "Begin position training",
+            key="new_hire_check_training"
+        )
+
+        st.markdown("---")
+        st.markdown("### What to Expect")
+
+        with st.expander("Before Your First Shift"):
+            st.write(
+                """
+                Confirm your scheduled start time, arrive in the required
+                uniform, bring any documents requested by leadership, and
+                ask where team members should enter and store their belongings.
+                """
+            )
+
+        with st.expander("During Your First Shift"):
+            st.write(
+                """
+                You will meet your trainer, tour the restaurant, review
+                expectations, and begin learning the fundamentals of your
+                assigned position.
+                """
+            )
+
+        with st.expander("During Your First Week"):
+            st.write(
+                """
+                You will continue practicing your position, receive coaching,
+                learn restaurant terminology, and become more familiar with
+                our systems, standards, and culture.
+                """
+            )
+
+    # ===================================================
+    # TAB 3: TRAINING JOURNEY
+    # ===================================================
+    with tab3:
+        st.header("Your Training Journey")
+
+        st.write(
+            """
+            Training is a process. You are not expected to know everything
+            immediately. Your trainer and leaders are here to coach you,
+            answer questions, and support your progress.
+            """
+        )
+
+        st.markdown(
+            """
+            <div style="
+                border-left: 5px solid #c41230;
+                background: #fff7f8;
+                border-radius: 10px;
+                padding: 20px;
+                margin-bottom: 18px;
+            ">
+                <h3 style="margin-top: 0;">Step 1: Orientation</h3>
+                <p>
+                    Learn about the restaurant, our culture, expectations,
+                    policies, and the people who will support you.
+                </p>
+            </div>
+
+            <div style="
+                border-left: 5px solid #c41230;
+                background: #fff7f8;
+                border-radius: 10px;
+                padding: 20px;
+                margin-bottom: 18px;
+            ">
+                <h3 style="margin-top: 0;">Step 2: Position Training</h3>
+                <p>
+                    Work alongside a trainer as you learn procedures,
+                    standards, and position responsibilities.
+                </p>
+            </div>
+
+            <div style="
+                border-left: 5px solid #c41230;
+                background: #fff7f8;
+                border-radius: 10px;
+                padding: 20px;
+                margin-bottom: 18px;
+            ">
+                <h3 style="margin-top: 0;">Step 3: Guided Practice</h3>
+                <p>
+                    Practice your position while receiving coaching,
+                    feedback, and support.
+                </p>
+            </div>
+
+            <div style="
+                border-left: 5px solid #c41230;
+                background: #fff7f8;
+                border-radius: 10px;
+                padding: 20px;
+                margin-bottom: 18px;
+            ">
+                <h3 style="margin-top: 0;">Step 4: Independent Performance</h3>
+                <p>
+                    Demonstrate that you can complete the responsibilities
+                    of your position accurately and confidently.
+                </p>
+            </div>
+
+            <div style="
+                border-left: 5px solid #c41230;
+                background: #fff7f8;
+                border-radius: 10px;
+                padding: 20px;
+                margin-bottom: 18px;
+            ">
+                <h3 style="margin-top: 0;">Step 5: Continued Development</h3>
+                <p>
+                    Continue building skills, learning additional positions,
+                    and exploring future leadership opportunities.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        st.info(
+            "Ask questions whenever you are unsure. Questions are an important "
+            "part of learning and development."
+        )
+
+ 
+    # ===================================================
+    # TAB 4: LEADERSHIP TEAM
+    # ===================================================
+    with tab4:
+        st.header("Meet the Leadership Team")
+
+        st.write(
+            """
+            Our leadership team is here to support your growth, answer
+            questions, provide coaching, and help you succeed.
+            """
+        )
+
+        leadership_rank_options = [
+            "director",
+            "supervisor",
+            "shift_lead",
+            "trainer",
+            "other"
+        ]
+
+        leadership_rank_labels = {
+            "director": "Director",
+            "supervisor": "Supervisor",
+            "shift_lead": "Shift Lead",
+            "trainer": "Trainer",
+            "other": "Other Leadership"
+        }
+
+        # -----------------------------------------------
+        # DIRECTOR: ADD A NEW LEADER
+        # Only visible when Edit Mode is on
+        # -----------------------------------------------
+        if new_hire_edit_mode and has_role("director"):
+            with st.expander("➕ Add a Leadership Team Member"):
+                with st.form(
+                    "add_leadership_profile_form",
+                    clear_on_submit=True
+                ):
+                    new_leader_name = st.text_input(
+                        "Leader's Name",
+                        key="new_leader_name"
+                    )
+
+                    new_leader_rank = st.selectbox(
+                        "Leadership Rank",
+                        leadership_rank_options,
+                        format_func=lambda rank: leadership_rank_labels[rank],
+                        key="new_leader_rank"
+                    )
+
+                    new_leader_title = st.text_input(
+                        "Current Title",
+                        key="new_leader_title",
+                        placeholder="Example: Data Analytics Director"
+                    )
+
+                    new_leader_description = st.text_area(
+                        "Description",
+                        key="new_leader_description",
+                        placeholder=(
+                            "Explain what this leader oversees and how "
+                            "they support the team."
+                        )
+                    )
+
+                    new_leader_photo = st.file_uploader(
+                        "Upload Photo",
+                        type=["jpg", "jpeg", "png", "webp"],
+                        key="new_leader_photo"
+                    )
+
+                    new_display_order = st.number_input(
+                        "Order Within This Rank",
+                        min_value=0,
+                        value=0,
+                        step=1,
+                        key="new_leader_display_order",
+                        help=(
+                            "Lower numbers appear first within the selected rank."
+                        )
+                    )
+
+                    add_leader = st.form_submit_button(
+                        "Add Leadership Profile",
+                        type="primary",
+                        use_container_width=True
+                    )
+
+                if add_leader:
+                    if not new_leader_name.strip():
+                        st.error("Please enter the leader's name.")
+
+                    elif not new_leader_title.strip():
+                        st.error("Please enter the leader's current title.")
+
+                    elif new_leader_photo is None:
+                        st.error("Please upload a photo.")
+
+                    else:
+                        photo_url, storage_path = upload_leadership_photo(
+                            uploaded_file=new_leader_photo,
+                            leader_name=new_leader_name
+                        )
+
+                        if photo_url:
+                            success = create_leadership_profile(
+                                full_name=new_leader_name,
+                                rank=new_leader_rank,
+                                title=new_leader_title,
+                                description=new_leader_description,
+                                photo_url=photo_url,
+                                storage_path=storage_path,
+                                display_order=int(new_display_order)
+                            )
+
+                            if success:
+                                st.success(
+                                    "Leadership profile added successfully."
+                                )
+                                st.rerun()
+
+                            else:
+                                # Remove the photo if the database profile
+                                # could not be saved.
+                                if storage_path:
+                                    try:
+                                        (
+                                            supabase.storage
+                                            .from_(LEADERSHIP_PHOTO_BUCKET)
+                                            .remove([storage_path])
+                                        )
+                                    except Exception:
+                                        pass
+
+        st.markdown("---")
+
+        # -----------------------------------------------
+        # LOAD LEADERSHIP TEAM
+        # -----------------------------------------------
+        leadership_team = get_leadership_team()
+
+        if not leadership_team:
+            st.info("No leadership profiles have been added yet.")
+
+        else:
+            leadership_sections = [
+                ("director", "Directors"),
+                ("supervisor", "Supervisors"),
+                ("shift_lead", "Shift Leads"),
+                ("trainer", "Trainers"),
+                ("other", "Other Leadership")
+            ]
+
+            for rank_value, section_title in leadership_sections:
+                rank_leaders = [
+                    leader
+                    for leader in leadership_team
+                    if (leader.get("rank") or "other") == rank_value
+                ]
+
+                if not rank_leaders:
+                    continue
+
+                rank_leaders.sort(
+                    key=lambda leader: (
+                        int(leader.get("display_order", 0) or 0),
+                        (leader.get("full_name") or "").lower()
+                    )
+                )
+
+                st.subheader(section_title)
+
+                # Five compact profiles per row
+                for i in range(0, len(rank_leaders), 5):
+                    cols = st.columns(5)
+                    row_leaders = rank_leaders[i:i + 5]
+
+                    for col, leader in zip(cols, row_leaders):
+                        with col:
+                            leader_id = leader["id"]
+                            photo_url = leader.get("photo_url")
+                            leader_name = leader.get("full_name", "")
+                            leader_title = leader.get("title", "")
+                            leader_description = (
+                                leader.get("description") or ""
+                            )
+
+                            # ---------------------------------------
+                            # COMPACT LEADERSHIP CARD
+                            # ---------------------------------------
+                            with st.container(border=True):
+                                if photo_url:
+                                    image_left, image_center, image_right = (
+                                        st.columns([0.15, 0.7, 0.15])
+                                    )
+
+                                    with image_center:
+                                        st.image(
+                                            photo_url,
+                                            use_container_width=True
+                                        )
+
+                                st.markdown(
+                                    (
+                                        "<div style='"
+                                        "text-align:center;"
+                                        "font-size:16px;"
+                                        "font-weight:700;"
+                                        "line-height:1.2;"
+                                        "margin-top:4px;"
+                                        "margin-bottom:4px;"
+                                        "'>"
+                                        f"{leader_name}"
+                                        "</div>"
+                                    ),
+                                    unsafe_allow_html=True
+                                )
+
+                                st.markdown(
+                                    (
+                                        "<div style='"
+                                        "text-align:center;"
+                                        "color:#c41230;"
+                                        "font-size:13px;"
+                                        "font-weight:600;"
+                                        "line-height:1.25;"
+                                        "min-height:34px;"
+                                        "margin-bottom:5px;"
+                                        "'>"
+                                        f"{leader_title}"
+                                        "</div>"
+                                    ),
+                                    unsafe_allow_html=True
+                                )
+
+                                if leader_description:
+                                    with st.expander(
+                                        "Learn More",
+                                        expanded=False
+                                    ):
+                                        st.write(leader_description)
+
+                            # ---------------------------------------
+                            # DIRECTOR: EDIT OR DELETE LEADER
+                            # Only visible when Edit Mode is on
+                            # ---------------------------------------
+                            if (
+                                new_hire_edit_mode
+                                and has_role("director")
+                            ):
+                                edit_key = (
+                                    f"editing_leader_{leader_id}"
+                                )
+
+                                if st.button(
+                                    "Edit",
+                                    key=(
+                                        f"edit_leader_button_"
+                                        f"{leader_id}"
+                                    ),
+                                    use_container_width=True
+                                ):
+                                    st.session_state[edit_key] = not (
+                                        st.session_state.get(
+                                            edit_key,
+                                            False
+                                        )
+                                    )
+
+                                if st.session_state.get(
+                                    edit_key,
+                                    False
+                                ):
+                                    with st.form(
+                                        f"edit_leader_form_{leader_id}"
+                                    ):
+                                        edited_name = st.text_input(
+                                            "Name",
+                                            value=leader_name,
+                                            key=(
+                                                f"edited_leader_name_"
+                                                f"{leader_id}"
+                                            )
+                                        )
+
+                                        current_rank = (
+                                            leader.get("rank") or "other"
+                                        )
+
+                                        if (
+                                            current_rank
+                                            not in leadership_rank_options
+                                        ):
+                                            current_rank = "other"
+
+                                        edited_rank = st.selectbox(
+                                            "Leadership Rank",
+                                            leadership_rank_options,
+                                            index=(
+                                                leadership_rank_options.index(
+                                                    current_rank
+                                                )
+                                            ),
+                                            format_func=lambda rank: (
+                                                leadership_rank_labels[rank]
+                                            ),
+                                            key=(
+                                                f"edited_leader_rank_"
+                                                f"{leader_id}"
+                                            )
+                                        )
+
+                                        edited_title = st.text_input(
+                                            "Current Title",
+                                            value=leader_title,
+                                            key=(
+                                                f"edited_leader_title_"
+                                                f"{leader_id}"
+                                            )
+                                        )
+
+                                        edited_description = st.text_area(
+                                            "Description",
+                                            value=leader_description,
+                                            key=(
+                                                f"edited_leader_description_"
+                                                f"{leader_id}"
+                                            )
+                                        )
+
+                                        edited_order = st.number_input(
+                                            "Order Within This Rank",
+                                            min_value=0,
+                                            value=int(
+                                                leader.get(
+                                                    "display_order",
+                                                    0
+                                                ) or 0
+                                            ),
+                                            step=1,
+                                            key=(
+                                                f"edited_leader_order_"
+                                                f"{leader_id}"
+                                            )
+                                        )
+
+                                        edited_active = st.checkbox(
+                                            "Active and visible",
+                                            value=bool(
+                                                leader.get(
+                                                    "active",
+                                                    True
+                                                )
+                                            ),
+                                            key=(
+                                                f"edited_leader_active_"
+                                                f"{leader_id}"
+                                            )
+                                        )
+
+                                        save_col, delete_col = (
+                                            st.columns(2)
+                                        )
+
+                                        with save_col:
+                                            save_leader = (
+                                                st.form_submit_button(
+                                                    "Save",
+                                                    use_container_width=True
+                                                )
+                                            )
+
+                                        with delete_col:
+                                            remove_leader = (
+                                                st.form_submit_button(
+                                                    "Delete",
+                                                    use_container_width=True
+                                                )
+                                            )
+
+                                    if save_leader:
+                                        if not edited_name.strip():
+                                            st.error(
+                                                "The leader's name is required."
+                                            )
+
+                                        elif not edited_title.strip():
+                                            st.error(
+                                                "The leader's title is required."
+                                            )
+
+                                        else:
+                                            success = (
+                                                update_leadership_profile(
+                                                    leader_id=leader_id,
+                                                    full_name=edited_name,
+                                                    rank=edited_rank,
+                                                    title=edited_title,
+                                                    description=(
+                                                        edited_description
+                                                    ),
+                                                    display_order=int(
+                                                        edited_order
+                                                    ),
+                                                    active=edited_active
+                                                )
+                                            )
+
+                                            if success:
+                                                st.session_state[
+                                                    edit_key
+                                                ] = False
+
+                                                st.success(
+                                                    "Leadership profile updated."
+                                                )
+                                                st.rerun()
+
+                                    if remove_leader:
+                                        success = (
+                                            delete_leadership_profile(
+                                                leader_id=leader_id,
+                                                storage_path=leader.get(
+                                                    "storage_path"
+                                                )
+                                            )
+                                        )
+
+                                        if success:
+                                            st.success(
+                                                "Leadership profile deleted."
+                                            )
+                                            st.rerun()
+
+                st.markdown("---")
 # -----------------------------
 # Main app
 # -----------------------------
@@ -2887,3 +3920,5 @@ elif page == "Suggestions Queue":
     render_suggestions_queue()
 elif page == "User Management":
     render_user_management()
+elif page == "New Hire Welcome":
+    render_new_hire_page()
