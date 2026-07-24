@@ -1535,10 +1535,11 @@ def log_login(user):
             .execute()
         )
 
+        st.success(f"Login saved: {result.data}")
         return True
 
     except Exception as e:
-        st.error(f"Login history error: {e}")
+        st.exception(e)
         return False
 
 # -----------------------------
