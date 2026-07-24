@@ -1525,22 +1525,21 @@ def remove_resource_favorite(resource_link_id: int) -> bool:
 
 def log_login(user):
     try:
-        user_agent = st.context.headers.get("User-Agent", "")
+        result = (
+            supabase.table("login_history")
+            .insert({
+                "username": user.get("username", ""),
+                "full_name": user.get("full_name", ""),
+                "login_time": datetime.utcnow().isoformat()
+            })
+            .execute()
+        )
 
-        supabase.table("login_history").insert({
-            "username": user["username"],
-            "full_name": user["full_name"],
-            "role": user["role"],
-            "login_time": datetime.utcnow().isoformat(),
-            "browser": user_agent,
-            "device": platform.machine(),
-            "operating_system": platform.platform(),
-            "successful": True
-        }).execute()
+        return True
 
     except Exception as e:
-        print("Login log error:", e)
-
+        st.error(f"Login history error: {e}")
+        return False
 
 # -----------------------------
 # UI helpers
